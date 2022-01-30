@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>C5 to BC</title>
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';" />
+</head>
+<body>
+    <script src="./renderer.js"></script>
+    <p>Current orders filepath: <span style="font-weight: bold" id="pathOne">N/A</span></p>
+    <button onclick="uploadFile(1)">Change</button>
+    
+    <br/>
+    <p>Current orders filepath: <span style="font-weight: bold" id="pathTwo"><N/A</span></p>
+    <button onclick="uploadFile(2)">Change</button>
+    
+    <br/>
+    <br/>
+
+    <p>Last handled ordernumber: <span style="font-weight: bold" id="orderNumber">N/A</span></p>
+    <input id='orderNumberInput'></input>
+    <button onclick="setOrderStart()">Change</button>
+
+    <p>Send data to BC</p>
+    <button id="send" onclick="startTransfer()">Send</button>
+    <button id="cancel">Cancel</button>
+    <!-- <h1>Hello World!</h1>
+    <p>
+        We are using Node.js <span id="node-version"></span>,
+        Chromium <span id="chrome-version"></span>,
+        and Electron <span id="electron-version"></span>.
+    </p> -->
+    
+</body>
+</html>
