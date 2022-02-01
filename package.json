@@ -19,6 +19,8 @@
     "electron": "^16.0.8"
   },
   "dependencies": {
+    "axios": "^0.25.0",
+    "dotenv": "^15.0.0",
     "electron-json-storage": "^4.5.0",
     "electron-reload": "^2.0.0-alpha.1",
     "electron-squirrel-startup": "^1.0.0",
