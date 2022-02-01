@@ -54,18 +54,25 @@ var shipmentCodes = [];
 var failedOrders = [];
 var failedOrderLines = [];
 var isPendingCancel = false;
+var gotShippingMethods = false;
+var gotCustomerConvertion = false;
+var gotSkuConvertion = false;
 
-ipcMain.on('sendsaveddata', () => {
+ipcMain.on('sendsaveddata', async () => {
+  sendConsoleInfo('Send saved data started');
+  getShipmentMethods();
+  getCustomerConvertion();
+  getSkuConvertion();
   sendSavedData();
 })
 
-function sendSavedData () {
+async function sendSavedData () {
   storage.getAll((error, data) => { 
     globalData = data;
     win.webContents.send('fetchedstorage', JSON.stringify(data));
   })
 }
-function sendCompleted () {
+async function sendCompleted () {
   win.webContents.send('completeddata', JSON.stringify({
     failedOrders: failedOrders
   }))
@@ -92,15 +99,15 @@ ipcMain.on('uploadfile', (event, filenumber) => {
   })
 })
 
+function sendConsoleInfo(info){
+  win.webContents.send('consoleinfo', JSON.stringify(info))
+}
+
 ipcMain.on('canceltransfer', async (event) => {
   isPendingCancel = true;
 });
 ipcMain.on('starttransfer', async (event) => {
-  console.log(globalData);
-  
-  var gotShipmentmethods = await getShipmentMethods();
-  var gotCustomerConvertion = await getCustomerConvertion();
-  var gotSkuConvertion = await getSkuConvertion();
+  failedOrders = [];
   var orders = [];
   const completed = readXlsxFile(fs.createReadStream(globalData.filePathOne))
     .then((rows) => {
@@ -117,9 +124,17 @@ ipcMain.on('starttransfer', async (event) => {
         var isB2B = false;
         order.id = row[0];
         order.customerNumber = row[13];
+        console.log(order);
         if(order.customerNumber.toString().length != 2){
           isB2B = true;
-          order.customerNumber = customerConvertion.find(c => c.old === order.customerNumber).new;
+          var customerConverted = customerConvertion.find(c => c.old === order.customerNumber);
+          if(customerConverted){
+            order.customerNumber = customerConverted.new;
+          }
+          else{
+            failedOrders.push(order.id);
+            return;
+          }
         }
         else{
           order.sellToCountry = row[13];
@@ -139,6 +154,7 @@ ipcMain.on('starttransfer', async (event) => {
           var billingState = "";
           var billingPostalCode = "";
           if(row[9] == "USA"){
+            billingCityPostalState[0] = billingCityPostalState[0].substring(0, billingCityPostalState[0].indexOf('-'));
             if(billingCityPostalState.count == 2){
               billingState = billingCityPostalState[1];
             }
@@ -170,6 +186,7 @@ ipcMain.on('starttransfer', async (event) => {
           var shippingState = "";
           var shippingPostalCode = "";
           if(row[9] == "USA"){
+            shippingCityPostalState[0] = shippingCityPostalState[0].substring(0, shippingCityPostalState[0].indexOf('-'));
             if(shippingCityPostalState.count == 2){
               shippingState = shippingCityPostalState[1];
             }
@@ -254,7 +271,6 @@ ipcMain.on('starttransfer', async (event) => {
 });
 
 async function sendOrdersToBC(orders){
-  failedOrders = [];
   for (let index = 0; index < orders.length; index++) {
     if(isPendingCancel){
       index = orders.length;
@@ -302,7 +318,7 @@ async function getOrderLinesByOrderID(orderNumber, orderID, extraWorkDelivery){
       orderLineIdRequests.push({
         method: 'GET',
         id: 'itemID_' + count,
-        url: process.env.COMPANIES_API_PART+"/items?$filter=number eq '" + extraWorkSku + "'&$select=id,number",
+        url: ''+"/items?$filter=number eq '" + extraWorkSku + "'&$select=id,number",
         headers: {
           "Content-Type": "application/json"
         }
@@ -320,7 +336,7 @@ async function getOrderLinesByOrderID(orderNumber, orderID, extraWorkDelivery){
           orderLineIdRequests.push({
             method: 'GET',
             id: 'itemID_' + count,
-            url: process.env.COMPANIES_API_PART+"/items?$filter=number eq '" + sku + "'&$select=id,number",
+            url: ''+"/items?$filter=number eq '" + sku + "'&$select=id,number",
             headers: {
               "Content-Type": "application/json"
             }
@@ -340,10 +356,10 @@ async function getOrderLinesByOrderID(orderNumber, orderID, extraWorkDelivery){
       
     });
     var requests = {requests: orderLineIdRequests};
-    return axios.post(process.env.BASIC_API_PATH+"$batch", requests, {
+    return axios.post(''+"$batch", requests, {
       auth: {
-          username: process.env.TOKEN_USER,
-          password: process.env.TOKEN_KEY
+          username: '',
+          password: ''
       }}).then(resp => {
         return {response: resp, orderLineRows: orderLineRows, orderID: orderID}
       });
@@ -376,7 +392,7 @@ async function getOrderLinesByOrderID(orderNumber, orderID, extraWorkDelivery){
           orderLinePostRequests.push({
             method: "POST",
             id: "orderLineRequestID_" + count,
-            url: process.env.COMPANIES_API_PART+"/salesOrders("+data.orderID+")/salesOrderLines",
+            url: ''+"/salesOrders("+data.orderID+")/salesOrderLines",
             body: orderLine,
             headers: {
               "Content-Type": "application/json"
@@ -388,10 +404,10 @@ async function getOrderLinesByOrderID(orderNumber, orderID, extraWorkDelivery){
       var requests = {
         requests: orderLinePostRequests
       };
-      return axios.post(process.env.BASIC_API_PATH+"$batch", requests, {
+      return axios.post(''+"$batch", requests, {
         auth: {
-          username: process.env.TOKEN_USER,
-          password: process.env.TOKEN_KEY
+          username: '',
+          password: ''
         },
         headers: {
           "Content-Type": "application/json;IEEE754Compatible=true"
@@ -409,10 +425,10 @@ async function getOrderLinesByOrderID(orderNumber, orderID, extraWorkDelivery){
 }
 
 async function sendOrderToBC(order){
-  return axios.post(process.env.CUSTOM_ORDER_API_PATH, order,
+  return axios.post('', order,
     {auth: {
-      username: process.env.TOKEN_USER,
-      password: process.env.TOKEN_KEY
+      username: '',
+      password: ''
   }})
   .then(response => {
     return response;
@@ -428,10 +444,10 @@ async function sendOrderToBC(order){
   // }
 }
 async function getShipmentMethods(){
-  return axios.get(process.env.BASIC_API_PATH+process.env.COMPANIES_API_PART+'/shipmentMethods', {
+  return axios.get(''+'/shipmentMethods', {
     auth: {
-      username: process.env.TOKEN_USER,
-      password: process.env.TOKEN_KEY
+      username: '',
+      password: ''
   }})
   .then((result) => {
     if(result && (result.status == 200 || result.status == 201) && result.data && result.data.value){
@@ -439,33 +455,40 @@ async function getShipmentMethods(){
         result.data.value.forEach(shipmentCode => {
           shipmentCodes.push({code: shipmentCode.code, id: shipmentCode.id});
         });
-        return true;
+        gotShippingMethods = true;
+        checkIfAllDataCollected();
     }
-    else
-      return false;
   }).catch(err => console.log(err));
 }
 
 async function getCustomerConvertion(){
-  return readXlsxFile(fs.createReadStream("./customerConvertion.xlsx"))
+  readXlsxFile(fs.createReadStream("./resources/app/customerConvertion.xlsx"))
   .then((rows) => {
     customerConvertion = [];
     rows.forEach(row => {
       customerConvertion.push({old: row[0], new: row[1]});
     })
-    return true;
+    gotCustomerConvertion = true;
+    checkIfAllDataCollected();
   })
   .catch(err => console.log(err));
 }
 
 async function getSkuConvertion(){
-  return readXlsxFile(fs.createReadStream("./skuConvertion.xlsx"))
+  readXlsxFile(fs.createReadStream("./resources/app/skuConvertion.xlsx"))
   .then((rows) => {
     skuConvertion = [];
     rows.forEach(row => {
       skuConvertion.push({old: row[0], new: row[2]});
     })
-    return true;
+    gotSkuConvertion = true;
+    checkIfAllDataCollected();
   })
   .catch(err => console.log(err));
+}
+
+async function checkIfAllDataCollected(){
+  if(gotSkuConvertion && gotCustomerConvertion && gotShippingMethods){
+    win.webContents.send('alldatacollected')
+  }
 }

@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 var globalData;
 var completedData;
 var isTransfering = false;
+var allDataCollected = false;
 
 contextBridge.exposeInMainWorld('electron', {
   uploadFile: (filenumber) => {
@@ -60,6 +61,7 @@ function setDataInHtml(){
 ipcRenderer.on('fetchedstorage', (sender, data) => {
   const parsedData = JSON.parse(data);
   globalData = parsedData;
+  console.log(globalData);
   setDataInHtml();
 })
 ipcRenderer.on('completeddata', (sender, data) => {
@@ -68,4 +70,11 @@ ipcRenderer.on('completeddata', (sender, data) => {
   completedData = parsedData;
   setDataInHtml();
 })
-
+ipcRenderer.on('consoleinfo', (sender, data) => {
+  const parsedData = JSON.parse(data);
+  console.log(parsedData);  
+})
+ipcRenderer.on('alldatacollected', (sender) => {
+  allDataCollected = true;
+  document.getElementById('send').disabled = false;
+})
