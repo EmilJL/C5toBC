@@ -20,10 +20,18 @@
     <p>Last handled ordernumber: <span style="font-weight: bold" id="orderNumber">N/A</span></p>
     <input id='orderNumberInput'></input>
     <button onclick="setOrderStart()">Change</button>
-
+    
+    <br/>
+    <br/>
+    
     <p>Send data to BC</p>
     <button id="send" onclick="startTransfer()">Send</button>
-    <button id="cancel">Cancel</button>
+    <button id="cancel" disabled='true' onclick="cancelTransfer()">Cancel</button>
+    
+    <br/>
+    <br/>
+
+    <p>Failed orders: <span id="failed"></span></p>
     <!-- <h1>Hello World!</h1>
     <p>
         We are using Node.js <span id="node-version"></span>,

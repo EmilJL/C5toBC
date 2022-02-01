@@ -48,9 +48,12 @@ app.on('window-all-closed', () => {
 
 var filePathOne;
 var filePathTwo;
-var latestOrderNumber;
-const skuConvertion = [];
-const customerConvertion = [];
+var skuConvertion = [];
+var customerConvertion = [];
+var shipmentCodes = [];
+var failedOrders = [];
+var failedOrderLines = [];
+var isPendingCancel = false;
 
 ipcMain.on('sendsaveddata', () => {
   sendSavedData();
@@ -59,27 +62,23 @@ ipcMain.on('sendsaveddata', () => {
 function sendSavedData () {
   storage.getAll((error, data) => { 
     globalData = data;
-    console.log(globalData);
     win.webContents.send('fetchedstorage', JSON.stringify(data));
   })
 }
+function sendCompleted () {
+  win.webContents.send('completeddata', JSON.stringify({
+    failedOrders: failedOrders
+  }))
+}
 
 ipcMain.on('setorderstart', (event, number) => {
-  console.log("huh");
-  console.log(number);
   storage.set('latestOrderNumber', number);
   sendSavedData();
 })
 
 ipcMain.on('uploadfile', (event, filenumber) => {
-  
-  console.log(process.env.CUSTOM_ORDER_API_PATH);
-  console.log(process.env.BASIC_API_PATH);
-  console.log(process.env.TOKEN_USER);
-  console.log(process.env.TOKEN_KEY);
   dialog.showOpenDialog({ properties: ['openFile'] }).then((file) => {
     if(file && file.filePaths && file.filePaths[0]){
-      console.log(filenumber);
       if(filenumber == 1){
         filePathOne = file.filePaths[0];
         storage.set('filePathOne', filePathOne)
@@ -93,24 +92,18 @@ ipcMain.on('uploadfile', (event, filenumber) => {
   })
 })
 
+ipcMain.on('canceltransfer', async (event) => {
+  isPendingCancel = true;
+});
 ipcMain.on('starttransfer', async (event) => {
   console.log(globalData);
   
-  readXlsxFile(fs.createReadStream("./skuConvertion.xlsx")).then((rows) => {
-    rows.forEach(row => {
-      skuConvertion.push({old: row[0], new: row[2]});
-    })
-  })
-  .then(() => {
-    readXlsxFile(fs.createReadStream("./customerConvertion.xlsx")).then((rows) => {
-      rows.forEach(row => {
-        customerConvertion.push({old: row[0], new: row[1]});
-      })
-    })
-  })
-  .then(() => {
-    var orders = [];
-    readXlsxFile(fs.createReadStream(globalData.filePathOne)).then((rows) => {
+  var gotShipmentmethods = await getShipmentMethods();
+  var gotCustomerConvertion = await getCustomerConvertion();
+  var gotSkuConvertion = await getSkuConvertion();
+  var orders = [];
+  const completed = readXlsxFile(fs.createReadStream(globalData.filePathOne))
+    .then((rows) => {
       var rowsTohandle = [];
       rows.shift();
       rows.forEach(row => {
@@ -125,7 +118,6 @@ ipcMain.on('starttransfer', async (event) => {
         order.id = row[0];
         order.customerNumber = row[13];
         if(order.customerNumber.toString().length != 2){
-          // console.log(order.customerNumber);
           isB2B = true;
           order.customerNumber = customerConvertion.find(c => c.old === order.customerNumber).new;
         }
@@ -140,9 +132,6 @@ ipcMain.on('starttransfer', async (event) => {
         // order.businessCentralInstanceId = "IFDK";
         // order.isBackorder = false;
         // order.hasSeperateShippingAddress = false;
-        
-        // FIND OUT IF AND WHY
-        // order.isB2B
       
         if(row[8]){
           var billingCityPostalState = row[8].split(' ');
@@ -222,7 +211,11 @@ ipcMain.on('starttransfer', async (event) => {
         // order.shipToCountry = row[35];
         order.shipToState = shippingState;
         order.shipToPostCode = shippingPostalCode;
-  
+        
+        if(isB2B && row[43] && row[13]){
+          order.extraWorkDelivery = {price: row[43], isDenmark: row[9] == "Danmark"}
+        }
+
         order.phoneNumber = row[11];
         order.email = row[64];
         // order.notes = '';
@@ -230,11 +223,17 @@ ipcMain.on('starttransfer', async (event) => {
         // order.paymentReference = '';
         order.externalDocumentNumber = row[0]
         
+        if(!isB2B)
+          order.paymentTermsId = '1155bbb9-cf25-ec11-8f47-000d3adca83b';
         // CHECK FREIGHTFORWARDER ETC (er lige nu DDP, EXW, DAP eller tom)
         
         // ALSO FIND PAYMENT TYPE AND order.currencyCode
-        order.currencyCode="USD";
+        order.currencyCode = row[19] == "US$" ? "USD" : row[19];
         order.grossWeight = row[76];
+
+        if(row[22] && shipmentCodes.find(sc => sc.code == row[22])){
+          order.shipmentMethodId = shipmentCodes.find(sc => sc.code == row[22]).id;
+        }
 
         orders.push(order);
       });
@@ -244,50 +243,74 @@ ipcMain.on('starttransfer', async (event) => {
       return orders;
     })
     .then((result) => {
-      sendOrdersToBC(result);
+      return sendOrdersToBC(result);
+    })
+    .then((result) => {
+      return true;
     })
     .catch((err) => {
       console.log(err);
     })
-  })
-  .catch((err) => {
-    console.log(err);
-  })
 });
 
 async function sendOrdersToBC(orders){
-  const indexToStartAt = orders.findIndex(item => item.id == globalData.latestOrderNumber) + 1;
-  var failedOrders = [];
-  // var currentlyHandledOrderNumber = 0;
-  for (let index = 0; indexToStartAt < orders.length; index++) {
-    var order = orders[index];
-    if(order){
-      var currentNumber = order.id;
-      // currentlyHandledOrderNumber = currentNumber;
-      delete order.id;
-      var response = await sendOrderToBC(order);
-      if((response.status != 201 && response.status != 200) || !response || !response.data || !response.data.id){
-        order.id = currentNumber
-        failedOrders.push(order);
+  failedOrders = [];
+  for (let index = 0; index < orders.length; index++) {
+    if(isPendingCancel){
+      index = orders.length;
+      isPendingCancel = false;
+    }
+    else{
+      var order = orders[index];
+      if(order){
+        var currentNumber = order.id
+        var extraWorkDelivery = order.extraWorkDelivery ? order.extraWorkDelivery : null;
+        if(order.extraWorkDelivery)
+          delete order.extraWorkDelivery
+        // currentlyHandledOrderNumber = currentNumber;
+        delete order.id;
+        var response = await sendOrderToBC(order);
+        if((response.status != 201 && response.status != 200) || !response || !response.data || !response.data.id){
+          order.id = currentNumber
+          failedOrders.push(order.id);
+        }
+        var orderLines = await getOrderLinesByOrderID(currentNumber, response.data.id, extraWorkDelivery);
+        //insert logic
+        console.log("success - " + currentNumber);
+        storage.set('latestOrderNumber', currentNumber);
+        globalData.latestOrderNumber = currentNumber;
+        sendSavedData();
+        // currentlyHandledOrderNumber = 0;
       }
-      var orderLines = await getOrderLinesByOrderID(currentNumber, response.data.id);
-      //insert logic
-    // storage.set('latestOrderNumber', currentNumber);
-    // globalData.latestOrderNumber = currentNumber;
-      console.log("success - " + currentNumber);
-      // currentlyHandledOrderNumber = 0;
     }
   }
+  sendCompleted();
+
+  return true;
 }
 // async function getOrderID()
 
-async function getOrderLinesByOrderID(orderNumber, orderID){
+async function getOrderLinesByOrderID(orderNumber, orderID, extraWorkDelivery){
   return readXlsxFile(fs.createReadStream(globalData.filePathTwo)).then((rows) => {
     var orderLineRows = [];
     var orderLineIdRequests = [];
 
     var count = 0;
     var requests = [];
+    if(extraWorkDelivery){
+      var extraWorkSku = extraWorkDelivery.isDenmark ? 'FREIGHT B2B DK' : 'FREIGHT B2B EU';
+      orderLineIdRequests.push({
+        method: 'GET',
+        id: 'itemID_' + count,
+        url: process.env.COMPANIES_API_PART+"/items?$filter=number eq '" + extraWorkSku + "'&$select=id,number",
+        headers: {
+          "Content-Type": "application/json"
+        }
+      });
+      count++;
+      var newRow = [parseInt(orderNumber), '', extraWorkSku, '', 1, extraWorkDelivery.price, null];
+      orderLineRows.push(newRow);
+    }
     rows.forEach(row => {
       if(parseInt(row[0]) == parseInt(orderNumber)){
         var sku = skuConvertion.find(s => s.old == row[2]) ? skuConvertion.find(s => s.old == row[2]).new.toUpperCase() : null;
@@ -305,23 +328,12 @@ async function getOrderLinesByOrderID(orderNumber, orderID){
           count++;
           row[2] = sku;
           orderLineRows.push(row)
-          // orderLine.documentId = orderID;
-          // orderLine.itemId = await axios.get(env.BASIC_API_PATH+"/items?$filter=number eq '" + sku + "'&$select=id,number", {
-          //   auth: {
-          //   username: process.env.TOKEN_USER,
-          //   password: process.env.TOKEN_KEY
-          // }});
-
-          // if(orderLine.itemId){
-          //   orderLine.
-          // }
-          // else
-          //   isSuccess = false;
         }
         else
           isSuccess = false;
         
         if(!isSuccess){
+          failedOrderLines.push({orderNumber: row[0], oldSku: row[2]});
           console.log("Orderline with oldSKU of: " + row[2] + " and order number of: " + row[0] + " encountered an error");
         }
       }
@@ -344,11 +356,6 @@ async function getOrderLinesByOrderID(orderNumber, orderID){
 
         if(resp.status == 200){
           skuIdPairs.push({sku: resp.body.value[0].number.toString(), id: resp.body.value[0].id})
-          console.log(resp.body.value[0]);
-        }
-        else{
-          console.log('__________________');
-          console.log(resp);
         }
       });
       var count = 0;
@@ -356,14 +363,16 @@ async function getOrderLinesByOrderID(orderNumber, orderID){
         var orderLine = {};
         for (let index = 0; index < skuIdPairs.length; index++) {
           const element = skuIdPairs[index];
-          console.log(element);
         }
         orderLine.itemId = skuIdPairs.find(sip => sip.sku == orderLineRow[2]) ? skuIdPairs.find(sip => sip.sku == orderLineRow[2].toString()).id : null;
         if(orderLine.itemId){
           orderLine.lineType = "Item";
           orderLine.quantity = orderLineRow[4];
-          orderLine.unitPrice =  orderLineRow[5]
-          orderLine.discountAmount = orderLineRow[6];
+          orderLine.unitPrice =  orderLineRow[5];
+          if(orderLineRow[6] && orderLine.quantity && orderLine.unitPrice){
+            orderLine.discountAmount = (orderLine.quantity*orderLine.unitPrice)*(orderLineRow[6]/100);
+          }
+          
           orderLinePostRequests.push({
             method: "POST",
             id: "orderLineRequestID_" + count,
@@ -379,8 +388,6 @@ async function getOrderLinesByOrderID(orderNumber, orderID){
       var requests = {
         requests: orderLinePostRequests
       };
-      console.log("___________________");
-      console.log(requests);
       return axios.post(process.env.BASIC_API_PATH+"$batch", requests, {
         auth: {
           username: process.env.TOKEN_USER,
@@ -388,18 +395,14 @@ async function getOrderLinesByOrderID(orderNumber, orderID){
         },
         headers: {
           "Content-Type": "application/json;IEEE754Compatible=true"
-        }}).then(resp => {
+        }})
+        .then(resp => {
           if(resp.status != 200 && resp.status != 201){
             console.log(resp);
           }
-        // console.log('_____________________________');
-        // console.log(resp);
-        if(resp.data && resp.data.responses){
-          resp.data.responses.forEach(e => {
-            // console.log(e);
-          });
-        }
-      })
+          return true;
+        })
+        .catch(err => console.log(err));
     }
   })
   .catch(err => console.log(err));
@@ -424,22 +427,45 @@ async function sendOrderToBC(order){
 
   // }
 }
-function sendOrderlinesToBC(orderlines){
-
+async function getShipmentMethods(){
+  return axios.get(process.env.BASIC_API_PATH+process.env.COMPANIES_API_PART+'/shipmentMethods', {
+    auth: {
+      username: process.env.TOKEN_USER,
+      password: process.env.TOKEN_KEY
+  }})
+  .then((result) => {
+    if(result && (result.status == 200 || result.status == 201) && result.data && result.data.value){
+        shipmentCodes = [];
+        result.data.value.forEach(shipmentCode => {
+          shipmentCodes.push({code: shipmentCode.code, id: shipmentCode.id});
+        });
+        return true;
+    }
+    else
+      return false;
+  }).catch(err => console.log(err));
 }
 
-function getCountryCodeByCountry(country){
-  console.log("______");
-  console.log(country);
-  var result = "";
-  for (const [key, value] of Object.entries(countries)) {
-    console.log(`${key}: ${value}`);
-    value.forEach(cname => {
-      if(cname == country)
-        result = key;
-    });
-    if(result != "")
-      break;
-  }
-  console.log(result);
+async function getCustomerConvertion(){
+  return readXlsxFile(fs.createReadStream("./customerConvertion.xlsx"))
+  .then((rows) => {
+    customerConvertion = [];
+    rows.forEach(row => {
+      customerConvertion.push({old: row[0], new: row[1]});
+    })
+    return true;
+  })
+  .catch(err => console.log(err));
+}
+
+async function getSkuConvertion(){
+  return readXlsxFile(fs.createReadStream("./skuConvertion.xlsx"))
+  .then((rows) => {
+    skuConvertion = [];
+    rows.forEach(row => {
+      skuConvertion.push({old: row[0], new: row[2]});
+    })
+    return true;
+  })
+  .catch(err => console.log(err));
 }

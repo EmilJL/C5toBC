@@ -1,15 +1,20 @@
 const { contextBridge, ipcRenderer } = require('electron')
 var globalData;
+var completedData;
+var isTransfering = false;
 
 contextBridge.exposeInMainWorld('electron', {
   uploadFile: (filenumber) => {
     ipcRenderer.send('uploadfile', filenumber)
   },
   startTransfer: () => {
+    isTransfering = true;
+    setDataInHtml();
     ipcRenderer.send('starttransfer');
   },
-  stopTransfer: () => {
-    ipcRenderer.send('stoptransfer');
+  cancelTransfer: () => {
+    document.getElementById('cancel').disabled = true;
+    ipcRenderer.send('canceltransfer');
   },
   setOrderStart: () => {
     var number = document.getElementById('orderNumberInput').value;
@@ -38,17 +43,29 @@ function setDataInHtml(){
     document.getElementById('pathTwo').innerHTML = globalData.filePathTwo;
   if(globalData.latestOrderNumber != null && globalData.latestOrderNumber != undefined)
     document.getElementById('orderNumber').innerHTML = globalData.latestOrderNumber;
+  if(isTransfering){
+    document.getElementById('send').disabled = true;
+    document.getElementById('cancel').disabled = false;
+  }
+  else{
+    document.getElementById('send').disabled = false;
+    document.getElementById('cancel').disabled = true;
+  }
+  if(completedData){
+    if(completedData.failedOrders && completedData.failedOrders.length > 0){
+      document.getElementById('failed').innerHTML = completedData.failedOrders.toString();
+    }
+  }
 }
-
-ipcRenderer.on('nice', (sender, filepath) => {
-  console.log("huh");
-  console.log(filepath);
-})
-
 ipcRenderer.on('fetchedstorage', (sender, data) => {
-  console.log("thefack");
   const parsedData = JSON.parse(data);
-  console.log(parsedData);
   globalData = parsedData;
   setDataInHtml();
 })
+ipcRenderer.on('completeddata', (sender, data) => {
+  isTransfering = false;
+  const parsedData = JSON.parse(data);
+  completedData = parsedData;
+  setDataInHtml();
+})
+
